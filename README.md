@@ -2,30 +2,33 @@
 
 ## Overview
 
-This project analyzes CRM sales data to understand which factors are associated with better outbound-call outcomes and to prepare the data for predictive modeling.
+This project analyzes CRM sales data to understand which factors are associated with stronger outbound-call outcomes and to build a predictive model for identifying calls that are more likely to progress beyond the dominant voicemail-type outcomes.
 
-The source data consists of three related CRM datasets:
+The project uses three related CRM datasets:
 
 - **Companies:** 15,604 records
 - **Contacts:** 57,638 records
 - **Calls:** 114,965 records
 
-The current work has focused on:
+The project currently includes:
 
 1. Data understanding
-2. Data quality and preprocessing
-3. Exploratory data analysis
-4. Business findings
+2. Data quality analysis
+3. Data preprocessing
+4. Exploratory data analysis
+5. Business findings
+6. Modeling target definition
+7. Modeling dataset design
 
-Predictive modeling is the next stage.
+The next stage is to train and evaluate the first baseline model.
 
 ---
 
-## 1. Data Understanding
+# 1. Data Understanding
 
 The project uses three relational CRM tables.
 
-### Companies
+## Companies
 
 One row represents one company.
 
@@ -43,7 +46,7 @@ Important fields include:
 - Associated Contact IDs
 - Associated Call IDs
 
-### Contacts
+## Contacts
 
 One row represents one contact or prospect.
 
@@ -62,7 +65,7 @@ Important fields include:
 - Associated Company IDs
 - Associated Call IDs
 
-### Calls
+## Calls
 
 One row represents one logged sales call.
 
@@ -79,7 +82,7 @@ Important fields include:
 - Associated Contact IDs
 - Associated Company IDs
 
-The datasets can therefore be related approximately as:
+The datasets can approximately be related as:
 
 ```text
 Company
@@ -93,9 +96,9 @@ Calls can also be linked directly to companies.
 
 ---
 
-## 2. Data Quality and Preprocessing
+# 2. Data Quality and Preprocessing
 
-### Primary-Key Validation
+## Primary-Key Validation
 
 `Record ID` was validated as the primary identifier in all three datasets.
 
@@ -105,36 +108,32 @@ Calls can also be linked directly to companies.
 | Contacts | 57,638 | 57,638 | 0 | 0 |
 | Calls | 114,965 | 114,965 | 0 | 0 |
 
-This confirmed that each dataset has a unique and complete primary key.
+Each dataset therefore has a unique and complete primary key.
 
 ---
 
-### Relationship Validation
+## Relationship Validation
 
-The CRM association fields originally appeared to contain invalid relationships because some IDs were imported as floating-point values such as:
+CRM association IDs were initially stored inconsistently.
+
+Examples included numeric IDs imported with `.0` suffixes:
 
 ```text
 314292292340.0
 ```
 
-instead of:
-
-```text
-314292292340
-```
-
-Some association columns also contain multiple IDs separated by semicolons:
+and fields containing multiple semicolon-separated IDs:
 
 ```text
 321810077406;177284935365
 ```
 
-A normalization step was therefore introduced to:
+IDs were normalized by:
 
-- convert IDs to strings
-- remove accidental `.0` suffixes
-- strip whitespace
-- split semicolon-separated IDs when validating relationships
+- converting them to strings
+- removing accidental `.0` suffixes
+- stripping whitespace
+- splitting semicolon-separated associations when required
 
 After normalization:
 
@@ -144,13 +143,13 @@ After normalization:
 | Call → Company | 0 / 111,001 |
 | Contact → Company | 0 / 56,732 |
 
-The datasets therefore have strong referential integrity and can be reliably joined.
+The three datasets can therefore be reliably joined.
 
 ---
 
-### Missing Data
+## Missing Data
 
-The CRM export contains a large number of sparse or unused fields.
+The HubSpot export contains many sparse or unused CRM fields.
 
 | Dataset | Columns ≥90% Missing |
 | --- | ---: |
@@ -162,52 +161,43 @@ Completely empty columns were also identified:
 
 - Companies: **105**
 - Contacts: **141**
-- Calls: many unused CRM and voice-agent fields
+- Calls: multiple unused CRM and voice-agent fields
 
-These columns contain no analytical value and should be removed from the modeling dataset.
+Completely empty and non-informative fields can be removed from the modeling dataset.
 
 ---
 
-### Useful Partially Missing Features
+## Useful Partially Missing Features
 
-Not every incomplete column should be removed.
+Some incomplete fields may still contain useful business information.
 
-Several potentially valuable variables contain moderate levels of missingness, including:
+Examples include:
 
-#### Company Features
+### Company Features
 
 - Year Founded
 - Secondary Sub-Industry
 - Web Technologies
 - Description
 - Is Public
-- Number of times contacted
 
-#### Contact Features
+### Contact Features
 
 - Job function
 - Department
 - Management Level
 - Number of times called
-- Number of times contacted
-- City
 - Secondary Sub-Industry
 
-Missingness was found to vary between call outcomes, suggesting that missing values are not completely random.
+Missingness was found to vary between call outcomes, meaning missing data is not necessarily random.
 
-For useful features, missingness can therefore be preserved using indicators such as:
-
-```python
-contacts["management_level_missing"] = (
-    contacts["Management Level"].isna().astype(int)
-)
-```
+For useful variables, missingness indicators may therefore be retained during feature engineering.
 
 ---
 
-### Columns Not Suitable as Direct Model Features
+## Features Excluded From Direct Modeling
 
-The following fields should generally not be used directly as predictive features:
+Fields that should generally not be used directly as predictors include:
 
 - Record IDs
 - Phone numbers
@@ -215,19 +205,18 @@ The following fields should generally not be used directly as predictive feature
 - LinkedIn URLs
 - Website URLs
 - Logo URLs
-- Raw association IDs
-- Raw association names
-- Completely empty fields
-- Single-value fields
-- Very high-cardinality identifiers
+- raw association IDs
+- completely empty fields
+- single-value fields
+- high-cardinality identifiers
 
-IDs should still be retained for joins and traceability.
+IDs are still retained for joining and traceability.
 
 ---
 
-### Potential Data Leakage
+## Potential Data Leakage
 
-Some CRM fields may contain information created after the event being predicted.
+Some CRM fields may contain information that was only created after the call being predicted.
 
 Examples include:
 
@@ -239,42 +228,47 @@ Examples include:
 - lifecycle-stage timestamps
 - potentially `Transcript Available`
 
-These variables should only be included if they would actually be available at the time the prediction is made.
+These fields should not be used unless they would have been available at prediction time.
 
 ---
 
-## 3. Exploratory Data Analysis
+# 3. Exploratory Data Analysis
 
-The initial EDA focuses on understanding which characteristics are associated with calls progressing beyond the two dominant call outcomes.
+The initial EDA investigated which contact, company, timing, and outreach characteristics were associated with calls progressing beyond the two dominant call outcomes.
 
-For the current analysis, calls with outcomes other than `CVM` and `GVM` are treated as calls that progressed beyond the two dominant voicemail-type outcomes.
+For the current analysis:
 
-These labels are currently inferred business categories and should be confirmed before being used as a final modeling target.
+```text
+CVM + GVM = dominant voicemail-type outcomes
+Other outcome = call progressed beyond CVM/GVM
+```
+
+The exact business definitions of the internal abbreviations should still be confirmed before deployment.
 
 ---
 
-### Call Outcome Distribution
+## Call Outcome Distribution
 
-The call outcome distribution is highly concentrated.
+The call outcome variable is highly imbalanced.
 
 | Outcome | Calls | Share |
 | --- | ---: | ---: |
 | CVM | 59,228 | 51.52% |
 | GVM | 43,026 | 37.43% |
 
-Together, CVM and GVM account for approximately:
+Together, CVM and GVM represent approximately:
 
 ```text
 88.95% of all calls
 ```
 
-This suggests that reaching prospects beyond voicemail-type outcomes is one of the largest bottlenecks in the current sales process.
+This suggests that progressing beyond voicemail-type outcomes is one of the main bottlenecks in the current calling process.
 
 ---
 
-### Repeated Calling Shows Diminishing Returns
+# 4. Business Findings
 
-The probability of reaching a non-CVM/GVM outcome decreases as additional calls are made to the same contact.
+## Repeated Calling Shows Diminishing Returns
 
 | Call Attempt | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -286,13 +280,13 @@ The probability of reaching a non-CVM/GVM outcome decreases as additional calls 
 | Calls 6–10 | 7.6% |
 | 11+ calls | 8.0% |
 
-The first attempt performs substantially better than later attempts.
+The first call performs substantially better than later attempts.
 
-This suggests that after approximately 3–5 unsuccessful calls, a different communication channel or contact within the company may be worth testing.
+This suggests that after approximately 3–5 unsuccessful calls, switching communication channels or contacting another person within the company may be worth testing.
 
 ---
 
-### Call Timing
+## Call Timing
 
 Call performance varies by weekday.
 
@@ -304,9 +298,9 @@ Call performance varies by weekday.
 | Thursday | 11.7% |
 | Friday | 9.0% |
 
-Thursday had the strongest observed performance, while Friday had the weakest.
+Thursday had the strongest observed performance and Friday the weakest.
 
-Calls later in the day also generally outperformed very early calls.
+Later calls also generally outperformed early-morning calls.
 
 | Hour | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -319,15 +313,13 @@ Calls later in the day also generally outperformed very early calls.
 | 4 PM | 11.3% |
 | 6 PM | 12.7% |
 
-This suggests that afternoon calling may be more effective than early-morning calling.
+This suggests that afternoon calling may be more effective than very early calling.
 
-Timezone handling should be verified before converting this into a final operational recommendation.
+Timezone handling should be verified before converting this into a final recommendation.
 
 ---
 
-## 4. Contact-Level Business Findings
-
-### Management Level
+## Management Level
 
 | Management Level | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -336,15 +328,11 @@ Timezone handling should be verified before converting this into a final operati
 | C-Level | 10.2% |
 | VP-Level | 8.3% |
 
-Managers had the strongest observed performance among the major management-level groups.
+Managers showed the strongest observed performance.
 
 ---
 
-### Department
-
-Healthcare-related operational departments also performed well.
-
-Examples include:
+## Department
 
 | Department | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -356,9 +344,11 @@ Examples include:
 | Marketing | 7.6% |
 | Sales | 7.1% |
 
+Healthcare and operational contacts appear particularly promising.
+
 ---
 
-### Job Function
+## Job Function
 
 Examples of high-performing functions include:
 
@@ -370,13 +360,9 @@ Examples of high-performing functions include:
 | Operations | 12.7% |
 | Executive | 11.2% |
 
-Healthcare and operational roles appear particularly promising.
-
 ---
 
-### Job Title Classification
-
-Some specific contact roles also showed higher rates.
+## Job Title Classification
 
 | Job Classification | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -391,15 +377,11 @@ Some specific contact roles also showed higher rates.
 | COO | 10.2% |
 | CIO | 9.2% |
 
-This suggests that role-specific targeting may be more useful than simply targeting the highest-ranking executive.
+Role-specific targeting may therefore be more effective than targeting solely by seniority.
 
 ---
 
-## 5. Company-Level Business Findings
-
-### Company Size
-
-Mid-sized companies appear more reachable than very large enterprises.
+## Company Size
 
 | Employee Range | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -411,13 +393,11 @@ Mid-sized companies appear more reachable than very large enterprises.
 | 5,000–10,000 | 9.1% |
 | 10,000–50,000 | 7.0% |
 
-The 51–250 employee segment performs at more than twice the rate of the 10,000–50,000 employee segment.
+Mid-sized organizations appear more reachable than very large enterprises.
 
 ---
 
-### Industry
-
-Industry is strongly associated with call outcomes.
+## Industry
 
 | Industry | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -435,9 +415,7 @@ Healthcare calls performed at more than twice the rate of manufacturing calls.
 
 ---
 
-### Target Segment
-
-Existing CRM segmentation also contains useful signal.
+## Target Segment
 
 | Target Segment | Non-CVM/GVM Rate |
 | --- | ---: |
@@ -446,134 +424,293 @@ Existing CRM segmentation also contains useful signal.
 | Venture Capital Invested | 12.3% |
 | Unsegmented | 9.8% |
 
-This suggests that the company's existing segmentation strategy already identifies prospect groups with different levels of responsiveness.
+Existing CRM segmentation therefore appears to contain useful sales signal.
 
 ---
 
-## 6. Sales Representative Analysis
+## Sales Representative Analysis
 
-Raw call outcome rates vary substantially between sales representatives.
+Raw non-CVM/GVM rates vary substantially between sales representatives.
 
-However, these results should not yet be interpreted directly as salesperson performance.
+These differences should **not yet be interpreted directly as salesperson performance**.
 
-Different representatives may receive different:
+Representatives may receive different:
 
 - industries
 - lead quality
-- territories
 - company sizes
-- target segments
 - campaigns
+- territories
+- target segments
 - time periods
 
-The next modeling stage should control for these factors before estimating salesperson effects.
+A multivariate model is required to separate rep effects from lead-assignment effects.
 
 ---
 
-## 7. Current Business Findings
+# 5. Binary Predictive Modeling Plan
 
-The analysis so far suggests several potentially actionable patterns.
+The first predictive model will be a **binary classification model**.
 
-### Prospect Targeting
+## Target Definition
 
-Priority may be worth shifting toward:
+Calls without a recorded `Call outcome` are removed from the modeling dataset.
 
-- healthcare organizations
-- RCM-related companies
-- practice groups
-- mid-sized companies
-- managers
-- clinical directors
-- revenue-cycle personnel
-- healthcare operations roles
-
-### Calling Strategy
-
-The current data suggests testing:
-
-- increased calling on Wednesday and Thursday
-- increased calling during afternoon hours
-- reduced reliance on very early-morning calling
-- changing strategy after approximately 3–5 unsuccessful attempts
-
-Alternative follow-up strategies could include:
-
-- email
-- LinkedIn outreach
-- calling another contact at the same organization
-
-### Sales Performance
-
-Large differences exist between representatives, but lead quality must be controlled before drawing performance conclusions.
-
----
-
-## 8. Limitations
-
-The current findings are exploratory and represent associations rather than proven causal effects.
-
-For example:
+The binary target is defined as:
 
 ```text
-Thursday calls → higher engagement
+target = 0 → Call outcome is CVM or GVM
+target = 1 → Call outcome is any other recorded outcome
 ```
 
-does not automatically mean:
+After excluding missing outcomes:
 
-```text
-Calling on Thursday causes higher engagement
-```
+| Target | Meaning | Calls | Share |
+| --- | --- | ---: | ---: |
+| 0 | CVM / GVM | 102,254 | 89.6% |
+| 1 | Other known outcome | 11,875 | 10.4% |
 
-Thursday may contain:
+The model therefore attempts to estimate:
 
-- different sales representatives
-- different lead segments
-- different campaigns
-- different prospect industries
-
-The same issue applies to company size, contact role, and other variables.
-
-The next stage therefore needs to control for multiple variables simultaneously.
+> **How likely is a call to progress beyond the dominant CVM/GVM outcomes?**
 
 ---
 
-## 9. Next Step: Predictive Modeling
+# 6. Modeling Dataset Design
 
-The next phase is to build a baseline classification model that estimates the probability that a call progresses beyond the dominant `CVM` and `GVM` outcomes.
+The modeling dataset will contain:
 
-Potential predictors include:
+```text
+ONE ROW = ONE CALL
+```
+
+Contact and company attributes will be joined onto each call using the validated CRM relationships.
+
+Conceptually:
+
+```text
+CALL
+│
+├── Call-level features
+│
+├── CONTACT
+│   └── Contact characteristics
+│
+└── COMPANY
+    └── Company characteristics
+```
+
+---
+
+## Baseline Features
+
+The first model will intentionally use a relatively small and interpretable feature set.
+
+### Call Features
+
+- weekday
+- hour
+- salesperson (`Activity assigned to`)
+- number of previous calls to the same contact
+
+### Contact Features
+
+- Job function
+- Department
+- Management Level
+- Job Title classification
+- Secondary Sub-Industry
+
+### Company Features
 
 - Industry
-- Company size
-- Target segment
-- Department
-- Management level
-- Job title
-- Previous call attempts
-- Day of week
-- Time of day
-- Sales representative
+- Year Founded
 
-The first model should be an interpretable baseline such as **Logistic Regression**.
-
-This will help determine whether patterns discovered during EDA remain important after controlling for the other variables.
-
-More complex models such as Random Forest or gradient-boosted trees can then be compared against the baseline.
+Potential features with very high missingness, such as `Employee range` and `Target Segment`, will initially be excluded from the baseline and can later be tested in an extended model.
 
 ---
 
-## Current Project Status
+# 7. Feature Engineering
+
+## Call Time
+
+`Activity date` will be converted into:
+
+```text
+weekday
+hour
+```
+
+These features allow the model to evaluate whether call timing remains predictive after controlling for other variables.
+
+---
+
+## Previous Call Attempts
+
+The exported CRM field representing total calls should not be used directly because it may include calls that occurred **after the call being predicted**.
+
+Instead, calls will be sorted chronologically by contact and a feature will be generated:
+
+```text
+prior_calls_to_contact
+```
+
+Example:
+
+```text
+First call  → 0 previous calls
+Second call → 1 previous call
+Third call  → 2 previous calls
+```
+
+This prevents future call activity from leaking into earlier predictions.
+
+---
+
+## Missing Values
+
+Useful categorical features with missing values can be represented using:
+
+```text
+Unknown
+```
+
+or additional missing-value indicators where appropriate.
+
+Numerical features will be imputed using values derived from the training data only.
+
+---
+
+## Categorical Encoding
+
+Categorical variables such as:
+
+- Industry
+- Department
+- Management Level
+- Job function
+- weekday
+- salesperson
+
+will be transformed into machine-readable features using techniques such as one-hot encoding.
+
+High-cardinality variables will be reviewed before inclusion.
+
+---
+
+# 8. Train/Test Strategy
+
+The modeling data will be divided into separate training and testing sets.
+
+The test set will remain unseen while the model is trained.
+
+Because sales activity occurs over time, a chronological split should also be considered so that older calls are used to predict newer calls.
+
+This more closely represents how the model would behave in production.
+
+---
+
+# 9. Baseline Model
+
+The first model will be:
+
+```text
+Logistic Regression
+```
+
+Logistic regression was selected as the baseline because it is:
+
+- simple
+- fast
+- interpretable
+- appropriate for binary classification
+- useful for understanding which factors increase or decrease predicted probability
+
+The baseline can later be compared against more complex models such as:
+
+- Random Forest
+- Gradient Boosting
+- XGBoost / LightGBM
+
+---
+
+# 10. Model Evaluation
+
+Because the target is highly imbalanced:
+
+```text
+Class 0 ≈ 89.6%
+Class 1 ≈ 10.4%
+```
+
+**accuracy alone will not be used as the primary evaluation metric.**
+
+A model that predicts every call as `0` would already achieve approximately 89.6% accuracy while providing no useful business value.
+
+Evaluation will therefore focus on:
+
+- Precision
+- Recall
+- F1 Score
+- ROC-AUC
+- Precision-Recall AUC
+- Confusion Matrix
+
+Particular attention will be paid to performance on:
+
+```text
+Class 1 = calls predicted to progress beyond CVM/GVM
+```
+
+---
+
+# 11. Modeling Goals
+
+The model should help answer questions such as:
+
+- Which contacts have the highest probability of producing meaningful engagement?
+- Which industries are most promising after controlling for other factors?
+- Does management level still matter after controlling for company and call characteristics?
+- Does calling on Thursday remain beneficial after controlling for rep and lead mix?
+- How strongly do previous failed call attempts reduce predicted engagement?
+- Are apparent salesperson differences explained by lead allocation?
+- Which combinations of prospect characteristics should sales prioritize?
+
+The goal is not simply to predict call outcomes.
+
+The final objective is to produce a **prospect prioritization system** that can help the sales team direct outbound effort toward calls with a higher probability of meaningful engagement.
+
+---
+
+# 12. Current Project Status
 
 ```text
 [✓] Data Understanding
-[✓] Data Quality Analysis
-[✓] Data Preprocessing Strategy
+[✓] Primary-Key Validation
+[✓] Relationship Validation
+[✓] Missing-Data Analysis
+[✓] Data Quality Assessment
+[✓] Preprocessing Strategy
 [✓] Exploratory Data Analysis
 [✓] Initial Business Findings
-[ ] Define Final Modeling Target
-[ ] Feature Engineering
-[ ] Baseline Model
-[ ] Model Evaluation
+
+[✓] Binary Target Definition
+[✓] Initial Feature Selection
+[✓] Modeling Dataset Design
+[✓] Leakage Review
+[✓] Evaluation Strategy
+
+[ ] Build Final Modeling Table
+[ ] Train/Test Split
+[ ] Preprocessing Pipeline
+[ ] Logistic Regression Baseline
+[ ] Baseline Evaluation
+[ ] Feature Interpretation
+[ ] Alternative Models
 [ ] Model Comparison
-[ ] Final Recommendations
+[ ] Final Sales Recommendations
 ```
+
+## Next Step
+
+The immediate next step is to construct the final modeling table and preprocessing pipeline, followed by training the first **Logistic Regression baseline model**.

@@ -1,2 +1,9 @@
-##Data Consistency
-The dataset consists of three relational CRM tables containing 15,604 companies, 57,638 contacts, and 114,965 calls. The Record ID field was confirmed to be unique and non-null in all three datasets. Initial referential-integrity checks appeared to show invalid company associations; however, further investigation showed that this was caused by inconsistent ID formatting, including .0 suffixes from numeric type inference and semicolon-separated multi-ID fields. After normalizing association IDs, all tested Call-to-Contact, Call-to-Company, and Contact-to-Company relationships achieved 100% referential integrity. This indicates that the three datasets can be reliably joined for downstream analysis and modeling.
+# Sales Data Initial Analysis Findings
+The three datasets join cleanly after ID normalization: 0 invalid Call→Contact, Call→Company, or Contact→Company relationships after cleaning.
+The raw HubSpot export is very bloated: Companies, Contacts, and Calls contain many fields that are 90–100% empty, so a large amount of CRM metadata can be discarded.
+The important call variables are actually well populated. Call direction, Call duration, Call status, Activity date, and several others have essentially no missing data; Call outcome is missing in only about 0.73% of records.
+Missingness is not random. Contact and company information is more complete for some call outcomes than others, which means CRM enrichment itself may contain useful signal.
+The Call outcome variable is extremely imbalanced. CVM accounts for 51.52% of calls and GVM another 37.43%. Together they're about 89% of all 114,965 calls.
+## Conclusion
+Data preparation and quality assessment found that the CRM data is sufficiently complete and relationally consistent for modeling. The dominant preliminary sales finding is that approximately 89% of recorded calls fall into the two dominant CVM/GVM outcome categories, suggesting that voicemail/non-engagement represents the largest bottleneck in the current calling process. The next analysis should therefore identify which contact, company, timing, and outreach factors increase the likelihood of meaningful engagement.
+#

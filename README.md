@@ -711,6 +711,152 @@ The final objective is to produce a **prospect prioritization system** that can 
 [ ] Final Sales Recommendations
 ```
 
-## Next Step
+## Logistic Regression Baseline
 
-The immediate next step is to construct the final modeling table and preprocessing pipeline, followed by training the first **Logistic Regression baseline model**.
+Two Logistic Regression models were evaluated using the same chronological train/test split:
+
+- **Unweighted Logistic Regression**
+- **Balanced Logistic Regression** using `class_weight="balanced"`
+
+The modeling target was defined as:
+
+```text
+0 = CVM or GVM
+1 = Any other recorded call outcome
+```
+
+The test set contained:
+
+- **19,498 class-0 calls**
+- **3,328 class-1 calls**
+
+This corresponds to a positive-class rate of approximately **14.6%** in the test period.
+
+### Unweighted Logistic Regression
+
+The standard Logistic Regression model strongly favored the majority class.
+
+| Metric | Class 0 | Class 1 |
+| --- | ---: | ---: |
+| Precision | 0.85 | 0.16 |
+| Recall | 0.99 | 0.01 |
+| F1 Score | 0.92 | 0.02 |
+
+Overall metrics:
+
+- Accuracy: **0.85**
+- ROC-AUC: **0.5278**
+- PR-AUC: **0.1572**
+
+Confusion matrix:
+
+```text
+[[19300   198]
+ [ 3290    38]]
+```
+
+The model correctly identified only **38 of the 3,328 class-1 calls**, giving a class-1 recall of approximately **1%**.
+
+Although the model achieved 85% accuracy, this result is misleading because approximately 85% of the test data belongs to class 0. The model achieved high accuracy primarily by predicting the majority class almost every time.
+
+Therefore, the unweighted model is not useful for identifying calls likely to progress beyond CVM/GVM.
+
+---
+
+### Balanced Logistic Regression
+
+A second Logistic Regression model was trained using:
+
+```python
+LogisticRegression(
+    class_weight="balanced",
+    max_iter=1000
+)
+```
+
+This assigns greater importance to errors made on the minority class during training.
+
+Results:
+
+| Metric | Class 0 | Class 1 |
+| --- | ---: | ---: |
+| Precision | 0.87 | 0.17 |
+| Recall | 0.62 | 0.46 |
+| F1 Score | 0.72 | 0.25 |
+
+Overall metrics:
+
+- Accuracy: **0.59**
+- ROC-AUC: **0.5269**
+- PR-AUC: **0.1553**
+
+Confusion matrix:
+
+```text
+[[12004  7494]
+ [ 1795  1533]]
+```
+
+The balanced model identified **1,533 of the 3,328 class-1 calls**, increasing class-1 recall from approximately **1% to 46%**.
+
+However, this improvement came with a large increase in false positives.
+
+---
+
+### Model Comparison
+
+| Model | Accuracy | Class-1 Precision | Class-1 Recall | Class-1 F1 | ROC-AUC | PR-AUC |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Unweighted Logistic Regression | 0.85 | 0.16 | 0.01 | 0.02 | 0.5278 | 0.1572 |
+| Balanced Logistic Regression | 0.59 | 0.17 | 0.46 | 0.25 | 0.5269 | 0.1553 |
+
+The balanced model performs much better at detecting the minority class, but both models have very similar ROC-AUC and PR-AUC values.
+
+This indicates that class weighting changes the decision behavior of the classifier but does not substantially improve its ability to separate class 0 from class 1.
+
+The balanced model is therefore preferable for the current objective because it identifies substantially more class-1 calls, but the overall predictive signal remains weak.
+
+---
+
+### Interpretation
+
+The Logistic Regression results suggest that the main limitation is not only class imbalance.
+
+Both models achieve an ROC-AUC of approximately **0.53**, which is only slightly above random classification.
+
+The PR-AUC values are also only slightly above the test-set positive rate of approximately **14.6%**.
+
+This suggests that the current pre-call features do not strongly separate:
+
+```text
+CVM/GVM
+```
+
+from:
+
+```text
+all other call outcomes
+```
+
+One likely issue is the definition of the positive class.
+
+The current class `1` includes many different outcomes, such as successful engagement, callbacks, wrong numbers, negative responses, and other call results. These outcomes do not necessarily represent a single consistent business behavior.
+
+---
+
+### Current Conclusion
+
+The initial Logistic Regression experiment established three key findings:
+
+1. **Class imbalance must be explicitly handled.**  
+   The unweighted model almost completely ignores the minority class.
+
+2. **Class weighting improves minority-class detection.**  
+   Class-1 recall increased from approximately 1% to 46%.
+
+3. **The current target remains difficult to predict.**  
+   Similar ROC-AUC and PR-AUC values across both models indicate that the feature set provides limited separation between the two current target classes.
+
+The next modeling step is to reconsider the target definition so that class `1` represents a more meaningful positive sales-engagement outcome, then retrain the baseline before testing more complex nonlinear models.
+
+

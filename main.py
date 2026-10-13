@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -8,8 +9,12 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     roc_auc_score,
-    average_precision_score
+    average_precision_score,
+    precision_score,
+    recall_score,
+    f1_score
 )
+from xgboost import XGBClassifier
 
 
 #load the csv files into pandas
@@ -35,12 +40,23 @@ features = [
     "weekday",
     "hour",
     "Activity assigned to",
+
+    # Historical behaviour
     "prior_calls_to_contact",
+    "days_since_last_call",
+    "prior_positive_calls",
+    "prior_negative_calls",
+    "prior_success_rate",
+    "days_since_last_positive",
+
+    # Contact information
     "Job function",
     "Department",
     "Management Level",
     "Job Title classification",
     "Secondary Sub-Industry",
+
+    # Company information
     "Industry",
     "Year Founded"
 ]
@@ -143,13 +159,53 @@ model_data["hour"] = (
 #this sort is necessary so it follows like a cronological order and you model cannot cheat
 model_data = model_data.sort_values(
     ["contact_id", "activity_dt", "Record ID"]
-)
-
+).reset_index(drop = True)
+# build call history so basically it is storing whether there has been previous calls when how long and as well how many days ago
 model_data["prior_calls_to_contact"] = (
     model_data
     .groupby("contact_id")
     .cumcount()
 )
+model_data["previous_call_time"] = (
+    model_data.groupby("contact_id")["activity_dt"].shift(1)
+)
+model_data["days_since_last_call"] = (
+    model_data["activity_dt"] - model_data["previous_call_time"]
+).dt.total_seconds()/86400
+
+#using history to creat positive or negative calls
+model_data["previous_target"] = (
+    model_data.groupby("contact_id")["target"].shift(1)
+)
+model_data["prior_positive_calls"] = (
+    model_data["previous_target"].eq(1).groupby(model_data["contact_id"]).cumsum()
+)
+model_data["prior_negative_calls"] = (
+    model_data["previous_target"].eq(0).groupby(model_data["contact_id"]).cumsum()
+)
+
+
+#create historical success rate
+model_data["prior_success_rate"] = (
+    model_data["prior_positive_calls"] /
+    model_data["prior_negative_calls"].replace(0, pd.NA)
+)
+
+#see how many days since last positive engagement
+model_data["positive_call_time"] = (
+    model_data["activity_dt"]
+    .where(model_data["target"] == 1)
+)
+
+model_data["last_positive_time"] = (
+    model_data.groupby("contact_id")["positive_call_time"]
+    .transform(lambda x: x.shift(1).ffill())
+)
+
+model_data["days_since_last_positive"] = (
+    model_data["activity_dt"] -
+    model_data["last_positive_time"]
+).dt.total_seconds() / 86400
 #sanity check
 """ #model_data table sanity check
 print("Shape:", model_data.shape)
@@ -218,12 +274,24 @@ categorical_features = [
     "Secondary Sub-Industry",
     "Industry"
 ]
-
 numeric_features = [
     "hour",
     "prior_calls_to_contact",
+    "days_since_last_call",
+    "prior_positive_calls",
+    "prior_negative_calls",
+    "prior_success_rate",
+    "days_since_last_positive",
     "Year Founded"
 ]
+
+# Use NumPy missing values for sklearn, and keep numeric columns numeric.
+for frame in (x_train, x_test):
+    for column in categorical_features:
+        values = frame[column].astype(object)
+        frame[column] = values.where(values.notna(), np.nan)
+    for column in numeric_features:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
 
 categorical_pipeline = Pipeline([
     (
@@ -275,13 +343,7 @@ model = Pipeline([
         )
     )
 ])
-modelA = Pipeline([
-    ("preprocessor", preprocessor),
-    (
-        "classifier",
-        HistGradientBoosting
-    )
-])
+
 
 model.fit(x_train, y_train)
 
@@ -303,4 +365,105 @@ print(
 print(
     "PR-AUC:",
     round(average_precision_score(y_test, y_prob), 4)
+)
+
+#try the xgboost model
+
+
+neg = (y_train == 0).sum()
+pos = (y_train == 1).sum()
+
+scale_pos_weight = neg/pos
+
+print(scale_pos_weight)
+
+xgb_model = Pipeline([
+    ("preprocessort", preprocessor),
+    (
+        "classifier",
+        XGBClassifier(
+            n_estimators = 300,
+            max_depth = 4,
+            learning_rate = 0.05,
+            subsample = 0.8,
+            colsample_bytree = 0.8,
+            scale_pos_weight = scale_pos_weight,
+            eval_metric = "logloss",
+            random_state = 42
+        )
+    )
+])
+
+xgb_model.fit(x_train, y_train)
+
+y_pred_xgb = xgb_model.predict(x_test)
+y_prob_xgb = xgb_model.predict_proba(x_test)[:, 1]
+
+print("Classification Report:")
+print(classification_report(y_test, y_pred_xgb))
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, y_pred_xgb))
+
+print(
+    "\nROC-AUC:",
+    round(roc_auc_score(y_test, y_prob_xgb), 4)
+)
+
+print(
+    "PR-AUC:",
+    round(average_precision_score(y_test, y_prob_xgb), 4)
+)
+
+#try with threshold 
+split_val = int(len(x_train) * 0.80)
+x_train2 = x_train.iloc[:split_val]
+x_val = x_train.iloc[split_val:]
+
+y_train2 = y_train.iloc[:split_val]
+y_val = y_train.iloc[split_val:]
+
+xgb_model.fit(x_train2, y_train2)
+val_prob = xgb_model.predict_proba(x_val)[:, 1]
+
+for threshold in [0.30, 0.35, 0.40, 0.45, 0.50,
+                  0.55, 0.60, 0.65, 0.70, 0.75]:
+
+    predictions = (val_prob >= threshold).astype(int)
+
+    precision = precision_score(y_val, predictions)
+    recall = recall_score(y_val, predictions)
+    f1 = f1_score(y_val, predictions)
+
+    print(
+        f"Threshold: {threshold:.2f} | "
+        f"Precision: {precision:.3f} | "
+        f"Recall: {recall:.3f} | "
+        f"F1: {f1:.3f}"
+    )
+
+#from analysis best threshold is 0.55
+
+Best_Threshold = 0.55
+
+xgb_model.fit(x_train, y_train)
+test_prob = xgb_model.predict_proba(x_test)[:, 1]
+y_pred_final = (
+    test_prob >= Best_Threshold
+).astype(int)
+
+
+print(classification_report(y_test, y_pred_final))
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, y_pred_final))
+
+print(
+    "\nROC-AUC:",
+    round(roc_auc_score(y_test, test_prob), 4)
+)
+
+print(
+    "PR-AUC:",
+    round(average_precision_score(y_test, test_prob), 4)
 )
